@@ -18,7 +18,7 @@
 
 | 依赖 | 说明 |
 |---|---|
-| DSH 运行环境 | 插件以动态 Cordis 插件形式加载 |
+| DSH 运行环境 | 动态版以动态 Cordis 插件形式加载；静态版以 npm 包（tgz）常驻 |
 | Java 8+ | sidecar 桥接程序运行环境 |
 | hdc | DevEco Studio 自带（`<DevEco>/sdk/default/openharmony/toolchains/hdc.exe`） |
 | 鸿蒙手机 | 开启开发者模式 + USB 调试（或 `hdc tconn` 无线连接） |
@@ -27,16 +27,25 @@
 
 ```
 dsh-hos-scrcpy/
-├── LICENSE                      # MIT 许可（原项目 HOScrcpy 署名）
 ├── README.md
-├── architecture.svg             # 架构图
-├── PluginMain/                  # 插件本体 + sidecar 运行时资源（全部必需）
-│   ├── host.js                  # 插件 Host 半区源码（DSH 进程内 Node.js）
-│   ├── client.js                # 插件 Client 半区源码（浏览器 React）
-│   ├── jmuxer.min.js            # H.264 网页解码库（运行时读取）
+├── architecture.svg               # 架构图
+├── dsh-hos-scrcpy-1.0.0.tgz       # 静态版安装包（npm pack 产物）
+├── PluginMain-Dynamic/            # 动态版：会话内 cordis_define 加载
+│   ├── host.js                    # Host 半区源码（harness.handle）
+│   ├── client.js                  # Client 半区源码（浏览器 React）
+│   ├── jmuxer.min.js              # H.264 网页解码库（运行时读取）
 │   ├── hosScrcpy-1.0.18-beta.jar  # 华为官方 SDK（运行时必需）
-│   └── out/                     # sidecar 编译产物（运行时必需）
-└── HOScrcpy-main/               # 官方参考项目（源码、原包 SDK）
+│   └── out/                       # sidecar 编译产物（运行时必需）
+├── PluginMain-Static/             # 静态版：npm 包源码（npm pack 出 tgz）
+│   ├── package.json               # dsh.bundle.patch / dsh.client 声明
+│   ├── lib/index.js               # Host 半区（webServer RPC 路由）
+│   ├── client/client.js           # Client 半区（__ModuleLoader__ bundle）
+│   ├── resources/                 # jar / out / jmuxer（运行时必需）
+│   └── cordis.patch.yml           # bundle patch：插入插件行
+├── Dev/                           # sidecar 源码 + 独立测试页
+│   ├── src/Main.java              # sidecar 主程序源码
+│   └── demo/index.html            # 独立测试页（不依赖 DSH）
+└── HOScrcpy-main/                 # 官方参考项目（源码、原包 SDK）
 ```
 
 ## 参考项目
@@ -46,22 +55,38 @@ dsh-hos-scrcpy/
 
 ## 使用
 
-### 1. 加载插件（DSH 动态插件）
+### 1. 动态版（会话内加载，重启失效）
 
-在 DSH 会话中定义并运行插件（`scry-1`），批准后右上角出现「设备列表」按钮：
+在 DSH 会话中定义并运行插件：`code.host` 填入 `PluginMain-Dynamic/host.js` 全文，`code.client` 填入 `PluginMain-Dynamic/client.js` 全文，`cordis_run` 激活，批准后右上角出现「设备列表」按钮：
 
 1. 设备列表 → 鸿蒙设备 → 点「投屏」
 2. 等待部署（首次约 10 秒，需推送手机端组件）
 3. 右侧出现控制区：手机画面 + 按键
 4. 点「日志▸」查看 hilog 实时日志
 
-### 2. 独立测试（不依赖 DSH）
+### 2. 静态版（npm 包常驻，推荐）
+
+```bash
+# 1. 安装 tgz 到 web profile（转发 pnpm）
+dsh plugin --profile web add dsh-hos-scrcpy-1.0.0.tgz
+
+# 2. 编辑 $DSH_HOME/profiles/web/package.json，把包加入 bundle 列表：
+#    "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-hos-scrcpy"] } }
+```
+
+重启 `dsh web` 后插件常驻，不再随 DSH 进程重启失效。可先用 `dsh --profile web --dump-config` 确认组合树中出现 `hos-scrcpy` 行。改动代码后重新打包：
+
+```bash
+cd PluginMain-Static && npm pack
+```
+
+### 3. 独立测试（不依赖 DSH）
 
 ```bash
 # 启动 sidecar（自动发现唯一在线设备）
 java -cp "<SDK jar>;<out目录>" Main --hdc "<hdc路径>" --port 18999
 
-# 浏览器打开 demo/index.html 连接测试
+# 浏览器打开 Dev/demo/index.html 连接测试
 ```
 
 ## 架构
@@ -79,10 +104,14 @@ java -cp "<SDK jar>;<out目录>" Main --hdc "<hdc路径>" --port 18999
 
 - 键盘文本输入未内置（系统输入法注入延迟高，已移除），输入请在手机上操作或使用系统输入法配合鼠标点击
 - 仅支持鸿蒙设备；安卓暂不支持
-- 动态插件定义随 DSH 进程重启失效，需重新定义加载
+- 动态版定义随 DSH 进程重启失效，需重新定义加载；静态版不受此限制
 
 ## 构建 sidecar（如需重新编译）
 
 ```bash
-javac -encoding UTF-8 -cp "<SDK jar>" -d out src/Main.java
+# 源码：Dev/src/Main.java；SDK jar：hosScrcpy-1.0.18-beta.jar
+# 动态版产物（覆盖 PluginMain-Dynamic/out）：
+javac -encoding UTF-8 -cp "<PluginMain-Dynamic/hosScrcpy-1.0.18-beta.jar>" -d PluginMain-Dynamic/out Dev/src/Main.java
+# 静态版产物（覆盖 PluginMain-Static/resources/out，随后重新 npm pack）：
+javac -encoding UTF-8 -cp "<PluginMain-Static/resources/hosScrcpy-1.0.18-beta.jar>" -d PluginMain-Static/resources/out Dev/src/Main.java
 ```
