@@ -91,34 +91,16 @@ java -cp "<SDK jar>;<out目录>" Main --hdc "<hdc路径>" --port 18999
 ## 架构
 
 ```mermaid
-flowchart LR
-  subgraph CL["DSH 网页（Client · 浏览器）"]
-    direction TB
-    A1[设备列表按钮]
-    A2[右侧控制区 · 宽度自适应]
-    A3[video · jmuxer 解码 H.264]
-    A4[鼠标触控 / 系统按键 / hilog]
-  end
-  subgraph HS["DSH Host（Node.js）"]
-    direction TB
-    B1[配置读写]
-    B2[环境检测 JAVA_HOME / hdc]
-    B3[设备发现 · hdc list]
-    B4[device:connect 拉起 sidecar]
-    B5[JSON RPC 路由]
-  end
-  subgraph SC["Java sidecar"]
-    direction TB
-    C1[Main --sn SN --hdc ...]
-    C2[ws://127.0.0.1 随机端口]
-    C3[H.264 帧广播 / 触控按键 / hilog 流]
-  end
-  PH[("鸿蒙手机")]
+flowchart TB
+  CL["DSH 网页（Client）<br/>设备列表 · 控制区 · jmuxer 解码<br/>触控 / 按键 / hilog"]
+  HS["DSH Host（Node.js）<br/>配置 · 环境检测 · 设备发现<br/>device:connect 拉起 sidecar · JSON RPC"]
+  SC["Java sidecar<br/>Main --sn SN · ws://127.0.0.1<br/>H.264 帧广播 · 触控按键 · hilog"]
+  PH(("鸿蒙手机"))
 
   CL <-->|"host.call · RPC"| HS
   HS -->|"spawn 拉起"| SC
-  CL <==>|"WebSocket 直连 · 视频帧/触控/按键（不经 Host）"| SC
   SC <-->|hdc| PH
+  CL <==>|"WebSocket 直连（视频帧 / 触控 / 按键，不经 Host）"| SC
 ```
 
 ## 安全说明
