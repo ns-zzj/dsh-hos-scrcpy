@@ -79,15 +79,6 @@ dsh plugin --profile web add dsh-hos-scrcpy-1.0.0.tgz
 cd PluginMain-Static && npm pack
 ```
 
-### 3. 独立测试（不依赖 DSH）
-
-```bash
-# 启动 sidecar（自动发现唯一在线设备）
-java -cp "<SDK jar>;<out目录>" Main --hdc "<hdc路径>" --port 18999
-
-# 浏览器打开 Dev/demo/index.html 连接测试
-```
-
 ## 架构
 
 ```mermaid
@@ -125,3 +116,12 @@ javac -encoding UTF-8 -cp "<PluginMain-Dynamic/hosScrcpy-1.0.18-beta.jar>" -d Pl
 # 静态版产物（覆盖 PluginMain-Static/resources/out，随后重新 npm pack）：
 javac -encoding UTF-8 -cp "<PluginMain-Static/resources/hosScrcpy-1.0.18-beta.jar>" -d PluginMain-Static/resources/out Dev/src/Main.java
 ```
+
+## 集成到其他软件开发
+
+启动如下命令：
+```bash
+# 启动 sidecar（自动发现唯一在线设备）
+java -cp "<SDK jar>;<out目录>" Main --hdc "<hdc路径>" --port 18999
+```
+并打开 Dev/demo/index.html 参考开发
