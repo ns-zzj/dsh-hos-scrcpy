@@ -1,24 +1,34 @@
-# dsh-hos-scrcpy — DSH 鸿蒙投屏控制插件
+# dsh-hos-scrcpy — DSH 鸿蒙投屏控制插件（v1.0.0）
 
-开发手机软件的时候总是手机电脑来回操作，所以搞了个这玩意，在 Deepseek Harness 网页里就能控制。
+> 开发手机软件时总在手机和电脑之间来回切换，太麻烦了。这个插件让你在 DeepSeek Harness 网页里**直接操作鸿蒙手机**：
+> 实时投屏、鼠标触控、系统按键、hilog 日志，**AI 助手还能"看到"手机屏幕**——截屏识别、读页面、找按钮、看报错，开发调试不用再两头跑。
 
-在 DSH 网页内直接投屏并操作鸿蒙（HarmonyOS NEXT）手机：实时画面、鼠标触控、系统按键、hilog 日志，无需在两个屏幕之间切换。
+## 它能做什么
 
-## 功能
+- **电脑上操作手机**：网页内实时投屏鸿蒙（HarmonyOS NEXT）手机，鼠标点击/拖动即触摸，返回/主页/音量键一键可按，无需在手机和电脑屏幕之间切换
+- **AI 也能识别屏幕**：开启「允许截图」后，AI 可用 `hos_scrcpy_screenshot` 工具截取手机屏幕并识别画面内容（每次截图前二次确认），例如"当前页面是什么应用？界面上有哪些按钮？屏幕上显示了什么错误？"
+- **截图入聊天框**：一键截取当前屏幕，像粘贴图片一样加进聊天输入框
+- **hilog 实时日志**：设备日志滚动查看（限速 60 行/秒，保留最近 500 行），排查问题不用开 DevEco
 
-- **设备发现**：USB / 局域网无线调试（hdc 已连接设备自动列出）
-- **实时投屏**：H.264 视频流，网页播放（jmuxer.js）
-- **触控操作**：鼠标点击 / 拖动 = 手机触摸（坐标自动换算设备分辨率）
-- **系统按键**：返回 / 主页 / 音量+ / 音量- 按钮
-- **hilog 日志**：设备实时日志滚动查看（每秒限速 60 行，保留最近 500 行）
-- **自适应布局**：右侧控制区宽度按手机屏幕比例自动调整，聊天区自动让位
-- **环境自动检测**：`JAVA_HOME` / `DEVECO_SDK_HOME` 环境变量优先，支持手动配置
+## 功能特性
+
+| 功能 | 说明 |
+|---|---|
+| 设备发现 | USB / 局域网无线调试，`hdc` 已连接设备自动列出 |
+| 实时投屏 | H.264 视频流，网页播放（jmuxer.js） |
+| 触控操作 | 鼠标点击/拖动 = 手机触摸，坐标自动换算设备分辨率 |
+| 系统按键 | 返回 / 主页 / 音量+ / 音量- / 电源 |
+| hilog 日志 | 设备实时日志滚动查看 |
+| AI 截图识别 | `hos_scrcpy_screenshot` 工具（deepseek-v4-flash-vision-exp），截图前二次确认 |
+| 截图入聊天框 | 截屏并直接加入聊天输入框 |
+| 自适应布局 | 右侧控制区宽度按手机屏幕比例调整，聊天区自动让位 |
+| 环境自动检测 | `JAVA_HOME` / `DEVECO_SDK_HOME` 优先，支持手动配置 |
 
 ## 环境要求
 
 | 依赖 | 说明 |
 |---|---|
-| DSH 运行环境 | 动态版以动态 Cordis 插件形式加载；静态版以 npm 包（tgz）常驻 |
+| DSH 运行环境 | 动态版以动态 Cordis 插件加载；静态版以插件包常驻 |
 | Java 8+ | sidecar 桥接程序运行环境 |
 | hdc | DevEco Studio 自带（`<DevEco>/sdk/default/openharmony/toolchains/hdc.exe`） |
 | 鸿蒙手机 | 开启开发者模式 + USB 调试（或 `hdc tconn` 无线连接） |
@@ -28,56 +38,35 @@
 ```
 dsh-hos-scrcpy/
 ├── README.md
-├── dsh-hos-scrcpy-1.0.0.tgz       # 静态版安装包（npm pack 产物）
+├── Dev/                           # sidecar 源码 + 独立测试环境（二次开发从这里开始）
+│   ├── src/Main.java              # sidecar 主程序源码（唯一手写源码）
+│   ├── demo/index.html            # 独立测试页（不依赖 DSH）
+│   ├── demo/jmuxer.min.js         # H.264 网页解码库
+│   └── doc.md                     # Dev 目录开发文档（协议/编译/排障）
 ├── PluginMain-Dynamic/            # 动态版：会话内 cordis_define 加载
-│   ├── host.js                    # Host 半区源码（harness.handle）
-│   ├── client.js                  # Client 半区源码（浏览器 React）
-│   ├── jmuxer.min.js              # H.264 网页解码库（运行时读取）
+│   ├── host.js                    # Host 半区源码
+│   ├── client.js                  # Client 半区源码
+│   ├── jmuxer.min.js              # 运行时读取（与 Dev/demo 同源）
 │   ├── hosScrcpy-1.0.18-beta.jar  # 华为官方 SDK（运行时必需）
 │   └── out/                       # sidecar 编译产物（运行时必需）
-├── PluginMain-Static/             # 静态版：npm 包源码（npm pack 出 tgz）
-│   ├── package.json               # dsh.bundle.patch / dsh.client 声明
+├── PluginMain-Static/             # 静态版：插件源码
+│   ├── package.json
 │   ├── lib/index.js               # Host 半区（webServer RPC 路由）
-│   ├── client/client.js           # Client 半区（__ModuleLoader__ bundle）
+│   ├── client/client.js           # Client 半区
 │   ├── resources/                 # jar / out / jmuxer（运行时必需）
 │   └── cordis.patch.yml           # bundle patch：插入插件行
-├── Dev/                           # sidecar 源码 + 独立测试页
-│   ├── src/Main.java              # sidecar 主程序源码
-│   └── demo/index.html            # 独立测试页（不依赖 DSH）
-└── HOScrcpy-main/                 # 官方参考项目（源码、原包 SDK）
 ```
 
-## 参考项目
-
-本项目基于 [HOScrcpy](https://gitcode.com/OpenHarmonyToolkitsPlaza/HOScrcpy)开发。
-原项目采用 [MIT 开源协议](https://gitcode.com/OpenHarmonyToolkitsPlaza/HOScrcpy/blob/main/LICENSE)。
-
-## 使用
+## 快速开始
 
 ### 1. 动态版（会话内加载，重启失效）
 
-在 DSH 会话中定义并运行插件：`code.host` 填入 `PluginMain-Dynamic/host.js` 全文，`code.client` 填入 `PluginMain-Dynamic/client.js` 全文，`cordis_run` 激活，批准后右上角出现「设备列表」按钮：
+在 DSH 会话中用 `cordis_define` 定义动态插件：`code.host` 填入 `PluginMain-Dynamic/host.js` 全文，`code.client` 填入 `PluginMain-Dynamic/client.js` 全文，`cordis_run` 激活，批准后右上角出现「设备列表」按钮：
 
 1. 设备列表 → 鸿蒙设备 → 点「投屏」
 2. 等待部署（首次约 10 秒，需推送手机端组件）
 3. 右侧出现控制区：手机画面 + 按键
 4. 点「日志▸」查看 hilog 实时日志
-
-### 2. 静态版（npm 包常驻，推荐）
-
-```bash
-# 1. 安装 tgz 到 web profile（转发 pnpm）
-dsh plugin --profile web add dsh-hos-scrcpy-1.0.0.tgz
-
-# 2. 编辑 $DSH_HOME/profiles/web/package.json，把包加入 bundle 列表：
-#    "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-hos-scrcpy"] } }
-```
-
-重启 `dsh web` 后插件常驻，不再随 DSH 进程重启失效。可先用 `dsh --profile web --dump-config` 确认组合树中出现 `hos-scrcpy` 行。改动代码后重新打包：
-
-```bash
-cd PluginMain-Static && npm pack
-```
 
 ## 架构
 
@@ -94,6 +83,14 @@ flowchart TB
   CL <==>|"WebSocket 直连（视频帧 / 触控 / 按键，不经 Host）"| SC
 ```
 
+## 二次开发
+
+**[开发文档](Dev/doc.md)** —— sidecar 源码解析、WebSocket 协议、编译与同步、独立测试页用法、常见故障排查，二次开发从这里开始。
+
+- 改动约定：sidecar 逻辑改 `Dev/src/Main.java`（编译产物同步到两个插件目录的 `out/`）；
+  协议改动要三处同步（`Main.java` + `Dev/demo/index.html` + 插件 `client.js`）；
+  前端 UI 只改插件 `client.js`
+
 ## 安全说明
 
 - sidecar 只监听 `127.0.0.1` 回环地址（随机端口），不暴露局域网
@@ -103,25 +100,12 @@ flowchart TB
 
 ## 已知限制
 
-- 键盘文本输入未内置（系统输入法注入延迟高，已移除），输入请在手机上操作或使用系统输入法配合鼠标点击
+- 键盘文本输入未内置（系统输入法注入延迟高，已移除），输入请在手机上操作或鼠标点击
 - 仅支持鸿蒙设备；安卓暂不支持
 - 动态版定义随 DSH 进程重启失效，需重新定义加载；静态版不受此限制
+- 画面静止时 SDK 不推帧，前端会提示"请持续滑动手机更新画面"（正常行为，非故障）
 
-## 构建 sidecar（如需重新编译）
+## 参考项目
 
-```bash
-# 源码：Dev/src/Main.java；SDK jar：hosScrcpy-1.0.18-beta.jar
-# 动态版产物（覆盖 PluginMain-Dynamic/out）：
-javac -encoding UTF-8 -cp "<PluginMain-Dynamic/hosScrcpy-1.0.18-beta.jar>" -d PluginMain-Dynamic/out Dev/src/Main.java
-# 静态版产物（覆盖 PluginMain-Static/resources/out，随后重新 npm pack）：
-javac -encoding UTF-8 -cp "<PluginMain-Static/resources/hosScrcpy-1.0.18-beta.jar>" -d PluginMain-Static/resources/out Dev/src/Main.java
-```
-
-## 集成到其他软件开发
-
-启动如下命令：
-```bash
-# 启动 sidecar（自动发现唯一在线设备）
-java -cp "<SDK jar>;<out目录>" Main --hdc "<hdc路径>" --port 18999
-```
-并打开 Dev/demo/index.html 参考开发
+本项目基于 [HOScrcpy](https://gitcode.com/OpenHarmonyToolkitsPlaza/HOScrcpy) 开发。
+原项目采用 [MIT 开源协议](https://gitcode.com/OpenHarmonyToolkitsPlaza/HOScrcpy/blob/main/LICENSE)。
