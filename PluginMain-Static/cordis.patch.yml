@@ -1,8 +1,0 @@
-# dsh-hos-scrcpy bundle patch
-#
-# 该包以「bundle」形式挂载：把包加入 profile 的 dsh.profile.bundles 后，
-# 这一层 patch 会向组合树插入插件行（宿主半区 + 浏览器半区）。
-# 详细安装步骤见 README.md。
-- insert:
-    - id: hos-scrcpy
-      name: dsh-hos-scrcpy
