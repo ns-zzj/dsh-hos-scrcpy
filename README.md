@@ -63,12 +63,10 @@ dsh-hos-scrcpy/
 
 以 npm 包（tgz）安装，重启 DSH 后插件常驻，适合正式使用：
 
-1. 打包：在 `PluginMain-Static/` 目录内执行 `npm pack`，生成 `dsh-hos-scrcpy-<版本>.tgz`
+1. 在Release下载 或 在`PluginMain-Static/`目录内执行`npm pack`生成 **dsh-hos-scrcpy-<版本>.tgz**
 2. 安装到 web profile：`dsh plugin --profile web add <tgz 路径>`
-3. 把 `dsh-hos-scrcpy` 加入 profile 的 bundle 列表（编辑 `$DSH_HOME/profiles/web/package.json` 的 `dsh.profile.bundles`）
-4. 重启 `dsh web`，右上角出现「设备列表」按钮即成功
-5. 设备列表 → 鸿蒙设备 → 点「投屏」→ 等待部署（首次约 10 秒）→ 右侧出现控制区：手机画面 + 按键
-6. 点「日志▸」查看 hilog 实时日志
+3. 重启 `dsh web`，右上角出现「设备列表」按钮即成功
+4. 设备列表 → 鸿蒙设备 → 点「投屏」→ 等待部署（首次约 10 秒）→ 右侧出现控制区：手机画面 + 按键
 
 详细说明见 [PluginMain-Static/README.md](PluginMain-Static/README.md)。
 
@@ -79,7 +77,6 @@ dsh-hos-scrcpy/
 1. 设备列表 → 鸿蒙设备 → 点「投屏」
 2. 等待部署（首次约 10 秒，需推送手机端组件）
 3. 右侧出现控制区：手机画面 + 按键
-4. 点「日志▸」查看 hilog 实时日志
 
 ## 架构
 
