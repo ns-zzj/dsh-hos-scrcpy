@@ -1,4 +1,4 @@
-# dsh-hos-scrcpy — DSH 鸿蒙投屏控制插件（v1.0.0）
+# dsh-hos-scrcpy — DSH 鸿蒙投屏控制插件
 
 > 开发手机软件时总在手机和电脑之间来回切换，太麻烦了。这个插件让你在 DeepSeek Harness 网页里**直接操作鸿蒙手机**：
 > 实时投屏、鼠标触控、系统按键、hilog 日志，**AI 助手还能"看到"手机屏幕**——截屏识别、读页面、找按钮、看报错，开发调试不用再两头跑。
@@ -59,7 +59,20 @@ dsh-hos-scrcpy/
 
 ## 快速开始
 
-### 1. 动态版（会话内加载，重启失效）
+### 1. 静态版（npm 包常驻，推荐）
+
+以 npm 包（tgz）安装，重启 DSH 后插件常驻，适合正式使用：
+
+1. 打包：在 `PluginMain-Static/` 目录内执行 `npm pack`，生成 `dsh-hos-scrcpy-<版本>.tgz`
+2. 安装到 web profile：`dsh plugin --profile web add <tgz 路径>`
+3. 把 `dsh-hos-scrcpy` 加入 profile 的 bundle 列表（编辑 `$DSH_HOME/profiles/web/package.json` 的 `dsh.profile.bundles`）
+4. 重启 `dsh web`，右上角出现「设备列表」按钮即成功
+5. 设备列表 → 鸿蒙设备 → 点「投屏」→ 等待部署（首次约 10 秒）→ 右侧出现控制区：手机画面 + 按键
+6. 点「日志▸」查看 hilog 实时日志
+
+详细说明见 [PluginMain-Static/README.md](PluginMain-Static/README.md)。
+
+### 2. 动态版（会话内加载，重启失效）
 
 在 DSH 会话中用 `cordis_define` 定义动态插件：`code.host` 填入 `PluginMain-Dynamic/host.js` 全文，`code.client` 填入 `PluginMain-Dynamic/client.js` 全文，`cordis_run` 激活，批准后右上角出现「设备列表」按钮：
 
