@@ -1,4 +1,4 @@
-# dsh-hos-scrcpy — DSH 鸿蒙投屏控制插件
+# dsh-hos-scrcpy — DSH 鸿蒙投屏控制插件（v1.0.0）
 
 > 开发手机软件时总在手机和电脑之间来回切换，太麻烦了。这个插件让你在 DeepSeek Harness 网页里**直接操作鸿蒙手机**：
 > 实时投屏、鼠标触控、系统按键、hilog 日志，**AI 助手还能"看到"手机屏幕**——截屏识别、读页面、找按钮、看报错，开发调试不用再两头跑。
@@ -109,3 +109,6 @@ flowchart TB
 
 本项目基于 [HOScrcpy](https://gitcode.com/OpenHarmonyToolkitsPlaza/HOScrcpy) 开发。
 原项目采用 [MIT 开源协议](https://gitcode.com/OpenHarmonyToolkitsPlaza/HOScrcpy/blob/main/LICENSE)。
+
+视频解码使用 [jmuxer](https://github.com/webstream-labs/jmuxer)。
+采用 [MIT 开源协议](https://github.com/webstream-labs/jmuxer/blob/master/LICENSE)。
