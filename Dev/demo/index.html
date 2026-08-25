@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>dsh-hos-scrcpy 投屏测试</title>
+<style>
+  body { margin: 0; background: #151517; color: #f9fafb; font-family: system-ui, sans-serif; }
+  .bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #ffffff1f; }
+  .bar h1 { font-size: 14px; margin: 0; font-weight: 500; }
+  .status { font-size: 12px; color: #9da1a8; }
+  .status.ok { color: #22c55e; }
+  .main { display: flex; gap: 12px; padding: 12px 16px; align-items: flex-start; }
+  .screen-wrap {
+    flex: none; width: 380px; background: #000; border-radius: 14px; overflow: hidden;
+    border: 1px solid #ffffff1f; box-shadow: 0 12px 32px rgba(0,0,0,.5);
+  }
+  video { width: 100%; display: block; cursor: crosshair; }
+  .log-panel {
+    flex: 1; min-width: 260px; max-height: 640px; overflow-y: auto;
+    background: #1b1b1c; border: 1px solid #ffffff1f; border-radius: 14px; padding: 10px 12px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.6; color: #adb2ba;
+  }
+  .log-panel div { white-space: pre-wrap; word-break: break-all; }
+  .btn { background: #232325; border: 1px solid #ffffff29; color: #f9fafb; border-radius: 8px;
+    padding: 5px 12px; font-size: 12px; cursor: pointer; }
+  .btn:hover { background: #2c2c2e; }
+  .btn.blue { background: #4176e6; border-color: transparent; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>dsh-hos-scrcpy 投屏测试</h1>
+  <button class="btn blue" id="connect">连接</button>
+  <button class="btn" id="stop">停止</button>
+  <span class="status" id="status">未连接</span>
+</div>
+<div class="main">
+  <div class="screen-wrap">
+    <video id="player" autoplay muted playsinline></video>
+  </div>
+  <div class="log-panel" id="log"></div>
+</div>
+
+<script src="jmuxer.min.js"></script>
+<script>
+var video = document.getElementById('player');
+var logEl = document.getElementById('log');
+var statusEl = document.getElementById('status');
+var ws = null;
+var jmuxer = null;
+var dragging = false;
+var frameCount = 0;
+var frameBytes = 0;
+var firstFrameShown = false;
+var deviceSize = null; // 设备原始分辨率 {w,h}，由 {"type":"size"} 响应获取
+var lastFrameTime = 0; // 最近一帧到达时间
+var firstFrameTime = 0; // 首帧到达时间
+
+// video 事件诊断
+['loadedmetadata', 'loadeddata', 'canplay', 'playing', 'waiting', 'stalled', 'error', 'ended'].forEach(function (ev) {
+  video.addEventListener(ev, function () {
+    var extra = '';
+    if (ev === 'loadedmetadata') extra = ' w=' + video.videoWidth + ' h=' + video.videoHeight;
+    log('video事件: ' + ev + extra);
+  });
+});
+video.addEventListener('error', function () {
+  log('video错误: code=' + video.error ? video.error.code : 'null');
+});
+
+function log(msg) {
+  var d = document.createElement('div');
+  d.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setStatus(text, ok) {
+  statusEl.textContent = text;
+  statusEl.className = 'status' + (ok ? ' ok' : '');
+}
+
+function connect() {
+  if (ws && ws.readyState <= 1) { log('已在连接中，跳过重复连接'); return; }
+  if (ws) { try { ws.close(); } catch (e) {} }
+  jmuxer = new JMuxer({
+    node: 'player', mode: 'video', flushingTime: 0, fps: 60, debug: true,
+    onError: function (d) { jmuxer.reset(); log('jmuxer error: ' + JSON.stringify(d)); }
+  });
+  // 显式触发播放（MSE 场景 autoplay 不一定生效）
+  video.play().then(function () { log('video.play() OK'); }).catch(function (e) { log('video.play() failed: ' + e.message); });
+  frameCount = 0; frameBytes = 0; firstFrameShown = false;
+  ws = new WebSocket('ws://127.0.0.1:18999/');
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = function () {
+    setStatus('已连接，等待视频流…', true);
+    log('WebSocket 已连接');
+    ws.send(JSON.stringify({ type: 'size' })); // 获取设备原始分辨率用于坐标换算
+    ws.send(JSON.stringify({ type: 'screen', mode: 'video' }));
+  };
+  ws.onmessage = function (ev) {
+    if (typeof ev.data === 'string') {
+      log('← ' + ev.data);
+      try {
+        var o = JSON.parse(ev.data);
+        if (o.msg && o.msg.indexOf('ready') >= 0) setStatus('视频流就绪', true);
+        if (o.msg === 'size' && o.data) {
+          var parts = String(o.data).split('x');
+          if (parts.length === 2) {
+            deviceSize = { w: parseInt(parts[0]), h: parseInt(parts[1]) };
+            log('设备分辨率: ' + deviceSize.w + 'x' + deviceSize.h);
+          }
+        }
+      } catch (e) {}
+    } else if (ev.data instanceof ArrayBuffer) {
+      frameCount++;
+      frameBytes += ev.data.byteLength;
+      lastFrameTime = Date.now();
+      if (firstFrameTime === 0) {
+        firstFrameTime = lastFrameTime;
+        log('首帧到达，画面就绪');
+        setStatus('已连接', true);
+      }
+      if (!firstFrameShown) {
+        firstFrameShown = true;
+        var u8 = new Uint8Array(ev.data);
+        var hex = [];
+        for (var i = 0; i < Math.min(u8.length, 12); i++) hex.push((u8[i] < 16 ? '0' : '') + u8[i].toString(16));
+        log('第一帧: len=' + ev.data.byteLength + ' head=' + hex.join(' '));
+        log('video 状态: readyState=' + video.readyState + ' paused=' + video.paused + ' videoWidth=' + video.videoWidth);
+      }
+      jmuxer.feed({ video: new Uint8Array(ev.data) });
+    }
+  };
+  ws.onerror = function () { setStatus('连接错误', false); log('WebSocket 错误'); };
+  ws.onclose = function () { setStatus('已断开', false); log('WebSocket 关闭'); };
+}
+
+function sendTouch(event, x, y) {
+  if (!ws || ws.readyState !== 1) return;
+  var r = video.getBoundingClientRect();
+  // 计算实际屏幕坐标（处理黑边）
+  var sx = x - r.left, sy = y - r.top;
+  var vw = video.videoWidth || 1, vh = video.videoHeight || 1;
+  var scale = Math.min(r.width / vw, r.height / vh);
+  var drawW = vw * scale, drawH = vh * scale;
+  var offX = (r.width - drawW) / 2, offY = (r.height - drawH) / 2;
+  // 用设备原始分辨率换算（视频流可能被 scale 缩小）
+  var d = deviceSize || { w: vw, h: vh };
+  var px = Math.floor((sx - offX) * d.w / drawW);
+  var py = Math.floor((sy - offY) * d.h / drawH);
+  // clamp 到屏幕内：保证 up/越界拖动也能送达（否则手机会一直处于触摸状态）
+  px = Math.max(0, Math.min(d.w - 1, px));
+  py = Math.max(0, Math.min(d.h - 1, py));
+  ws.send(JSON.stringify({ type: 'touch', event: event, x: px, y: py }));
+}
+
+video.addEventListener('mousedown', function (e) { dragging = true; sendTouch('down', e.clientX, e.clientY); });
+video.addEventListener('mousemove', function (e) { if (dragging) sendTouch('move', e.clientX, e.clientY); });
+window.addEventListener('mouseup', function (e) { if (dragging) { dragging = false; sendTouch('up', e.clientX, e.clientY); } });
+// 触屏支持
+video.addEventListener('touchstart', function (e) { e.preventDefault(); var t = e.touches[0]; dragging = true; sendTouch('down', t.clientX, t.clientY); });
+video.addEventListener('touchmove', function (e) { e.preventDefault(); var t = e.touches[0]; if (dragging) sendTouch('move', t.clientX, t.clientY); });
+video.addEventListener('touchend', function (e) { e.preventDefault(); dragging = false; sendTouch('up', e.changedTouches[0].clientX, e.changedTouches[0].clientY); });
+
+document.getElementById('connect').onclick = connect;
+document.getElementById('stop').onclick = function () {
+  if (ws) { ws.send(JSON.stringify({ type: 'screen', mode: 'stop' })); ws.close(); ws = null; }
+  setStatus('已停止', false);
+};
+// 键盘按键
+window.addEventListener('keydown', function (e) {
+  if (!ws || ws.readyState !== 1) return;
+  var key = null;
+  if (e.key === 'F1') key = 'power';
+  else if (e.key === 'Backspace') key = 'back';
+  else if (e.key === 'Home') key = 'home';
+  else if (e.key === 'F2') key = 'volumeUp';
+  else if (e.key === 'F3') key = 'volumeDown';
+  if (key) { e.preventDefault(); ws.send(JSON.stringify({ type: 'key', name: key })); log('按键: ' + key); }
+});
+setInterval(function () {
+  if (!ws || ws.readyState !== 1) return;
+  if (frameCount === 0) {
+    // 已连接但一帧未到：可能是画面静止（SDK 只在画面变化时推帧）
+    setStatus('连接中……（请持续滑动手机更新画面）', false);
+  } else {
+    var now = Date.now();
+    var idleSec = Math.round((now - lastFrameTime) / 1000);
+    if (idleSec >= 5) {
+      // 有首帧但长时间无更新：画面静止
+      setStatus('画面静止 ' + idleSec + ' 秒 · 请操作手机更新画面', false);
+    } else {
+      setStatus('已连接 · ' + frameCount + ' 帧 / ' + (frameBytes / 1024 / 1024).toFixed(1) + ' MB', true);
+    }
+  }
+}, 2000);
+log('打开后点击「连接」。操作提示：鼠标点击/拖动 = 触摸；Backspace=返回；Home=主页；F1=电源；F2/F3=音量');
+</script>
+</body>
+</html>
