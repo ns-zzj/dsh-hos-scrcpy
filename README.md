@@ -121,3 +121,5 @@ flowchart TB
 
 视频解码使用 [jmuxer](https://github.com/webstream-labs/jmuxer)。
 采用 [MIT 开源协议](https://github.com/webstream-labs/jmuxer/blob/master/LICENSE)。
+
+本插件分发的第三方组件（hosScrcpy jar 与 jmuxer.min.js）随包附带其版权声明与许可全文，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
