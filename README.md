@@ -108,7 +108,7 @@ flowchart TB
 - 改动约定：sidecar 逻辑改 `Dev/src/Main.java`（编译产物同步到插件目录的 `out/`）；
   协议改动要三处同步（`Main.java` + `Dev/demo/index.html` + 插件 `client.js`）；
   前端 UI 只改插件 `client.js`
-- 静态包（npm/tgz）的 `client/client.js` 由 `Dev/gen-static-client.mjs` 从动态版 `client.js` 生成，**不要手改**；改完动态版跑一次生成器即可（`node Dev/gen-static-client.mjs`，`--check` 可校验是否同步）
+- 静态包（npm/tgz）的 `client/client.js` 是动态版 `client.js` 的机械改写成品，**改一处必须同步另一处**（原先生成它的脚本 `Dev/gen-static-client.mjs` 已废弃删除）：`host.call(`→`rpc(`、`styles.insert(`→`insertStyles(`、`ctx.timer.interval(`→`interval(`、`ctx.timer.timeout(`→`timeout(`，插件对象改为 `exports.inject = ['slots', 'sidebarRightTabs', 'sidebarRight']` + `exports.apply`，并用 `window.__ModuleLoader__.load({ id, factory })` 包一层；改完务必在静态包里实测一次投屏（`inject` 里漏写 sidebar 服务会让 `apply` 静默退化）
 
 ## 安全说明
 
