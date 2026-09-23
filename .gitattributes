@@ -1,0 +1,9 @@
+# 行尾策略：任何机器上都按 LF 存取，不随本机 core.autocrlf 变化。
+#
+# 背景：本机 Git 安装（D:/Learning/Git/etc/gitconfig）里 core.autocrlf=true，
+# 一旦在克隆里跑 checkout / reset --hard / stash 之类会写工作树的命令，
+# 工作树里的 LF 会被改写成 CRLF，于是 GithubFiles / PluginMain-Static / 克隆之间
+# 出现"内容相同、哈希不同"，破坏逐字节比对。此文件把行尾钉死为 LF。
+#
+# 二进制文件（jar / class）由 git 自动判定，不做转换。
+* text=auto eol=lf
