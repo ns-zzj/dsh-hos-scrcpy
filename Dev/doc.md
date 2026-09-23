@@ -91,6 +91,48 @@ DSH 插件（Host 半区）负责 `spawn` 拉起 sidecar，解析就绪行拿到
 10. **`--scale` 只缩小视频流**：触控坐标必须按**设备原始分辨率**（`size` 命令获取）换算，不能用视频流分辨率。
 11. 诊断日志统一带 `[bridge]` / `[ws]` 前缀打到 stdout；每 2 秒打印一次帧统计（帧数/字节数/客户端数）；
     前 3 帧打印头部 12 字节十六进制（用于判断 H.264 封装格式）。
+12. **开流必须互斥且只能启动一次（踩过的坑，改并发逻辑时不要破坏）**：
+    浏览器一连上 WS 就有两条路同时开流——`WsServer` 的 0→1 自动开流（`onClientCountChanged`）
+    与客户端显式发的 `{"type":"screen","mode":"video"}`。而 `capturing` 只能在 `startCaptureScreen()`
+    返回后才置位（真机无线实测要 3~4 秒），这段时间里两个线程都会以为"没人开流"，
+    于是各自 `stopCaptureScreen()` + `startCaptureScreen()` 一次，后一次会打断前一次刚起的抓屏线程。
+    实测现象：stdout 连续两行 `[bridge] video capture started`，并收到
+    `stream error: java.lang.InterruptedException: sleep interrupted`，随后 `stream ready (video)`
+    照常回调但**永远 0 帧** → 前端一直停在"连接中……（请持续滑动手机更新画面）"。
+    这也解释了"有线没问题、无线黑屏"：有线时设备端无需部署，自动开流瞬间完成，
+    命令到达时 `capturing` 已为 true，只启动一次。
+    修法：`capLock` + `starting` 标志（见 `startVideo()` / `startImage()` / `stop()`），
+    `stop()` 在 `starting` 期间直接返回。
+13. **`screen` 命令异步执行**：开流/停流是阻塞调用（真机无线实测 3~4 秒），
+    不能在 WS 读取线程里同步跑，否则这段时间内的触控/按键/日志命令全部排队。
+    改用 `runAsync()` 派发到 `ctl-async` 线程后再回响应。
+14. **看门狗 `watchStream()`**：SDK 偶发"`stream ready` 之后 15 秒一帧都不来"
+    （实测真机无线遇到过：设备端日志停在 `start startUiTestServer end` 之后短暂停滞）。
+    规则只看"本次开流后一帧都没到"——画面静止时 SDK 本来就不推帧，那种情况 `frameCount` 早就不为 0，
+    不会误判。最多自动重试 3 次。**重试后能否救回画面未验证**（实测中没等到它触发，进程就被脚本杀掉了）。
+15. **模拟器（emulator）不支持视频流投屏**：SDK 把 `libscreen_casting.z.so` 推到 `/data/local/tmp` 后，
+    会依次尝试 `libscrcpy_server_unix_6.6-20260629 / 6.6-20260418 / 6.5-20260313 / 6.4-20260113`，
+    四个全部失败，回调收到 `java.lang.RuntimeException: can not find scrcpy pid`，一帧都没有。
+    设备端日志里有 `check cloud device resource result :/system/lib64/libCPHMediaEngine.z.so: cannot open`
+    （华为媒体引擎库在模拟器上不存在）。这是设备/ROM 限制，不是插件问题。
+16. **这条流整场只有一个关键帧（实测数据，改前端渲染逻辑前必读）**：
+    用 `Temp/nal.js` 统计真机抓流（12 秒 / 3.7 MB）得到 —— `SPS×1  PPS×1  IDR×1  P 帧×160`，
+    且 SPS+PPS 挤在第一段 AU（32 字节）里，之后**再也不会重发参数集或关键帧**。
+    后果：任何"新起的解码器"（刷新页面、切走标签页再切回来、第二个浏览器窗口）都拿不到
+    SPS/PPS 与 I 帧，只能一直黑屏——**后续 P 帧再多也没用**。
+    两条应对，缺一不可：
+    - **前端**：投屏画面挂在常驻的 header 组件（`DevicePanel`）里，不放在标签页 body 里。
+      dockkit 的 `paneBody` 只渲染活动标签的 body（见 `dsh-client-ui-dockkit` 的 `renderTab(activeTabId)`），
+      切走就卸载；放在标签页里必然掉线。现在标签页只负责上报自己的矩形
+      （`ScrcpyTabBody` → `sessionStore.dock`），面板用 `placement: 'overlay'` 贴上去，
+      标签页不在最前时 `placement: 'hidden'`（`display:none`，**DOM 不卸载、WS 与解码器继续收流**）。
+    - **sidecar（兜底）**：确有新客户端接入时重开一次编码会话（`restartVideo()`），
+      新会话首帧必为 SPS/PPS+IDR。这条只在"连接真的断了重连"时兜底，正常切标签页不会触发。
+17. **有线/无线识别 + 无线降画质**：`isWirelessDevice()` 解析 `hdc list targets -v` 中该设备那行的
+    传输类型（实测输出：`192.168.1.241:35147		TCP	Connected	localhost	hdc`），
+    取不到时用 `ip:port` 形态兜底。无线时 `--scale` 用配置 `wirelessScale`（默认 4），有线固定 2；
+    档位越大视频流越小越省流（1320 宽的画面 1/2 → 660，1/4 → 330）。
+    `device:connect` 会把 `wireless` / `scale` 返回给前端，面板头部显示「无线 · 1/4」这类标记。
 
 ### 2.5 编译与同步
 
@@ -100,7 +142,9 @@ DSH 插件（Host 半区）负责 `spawn` 拉起 sidecar，解析就绪行拿到
 javac -encoding UTF-8 -cp "resources/hosScrcpy-1.0.18-beta.jar" -d resources/out Dev/src/Main.java
 ```
 
-> ⚠️ `resources/out/` 是编译产物，改源码后必须重新编译。
+> 实测：用 JDK-8 的 `javac` 编译，产物 `major=52`（Java 8 字节码），与 README 里写的 "Java 8+" 一致。
+> ⚠️ `resources/out/` 是编译产物，改源码后必须重新编译；`GithubFiles`、`PluginMain-Dynamic`、
+> `PluginMain-Static` 三处 `out/` 必须同步（改完用哈希核对一致）。
 
 ## 3. Dev/demo/index.html —— 独立测试页
 
@@ -169,6 +213,10 @@ java -cp "<SDK jar路径>;<out目录>" Main --hdc "<hdc路径>" --port 18999
 |---|---|
 | sidecar 起不来 | Host 日志看 Java/hdc 路径；手动跑 `java -cp ... Main --sn <sn> --hdc <path>` 看 stderr |
 | 连上但无帧 | 静止画面正常；请滑动手机；看 `[bridge]` 是否打印 `stream ready` |
+| 连上后一直"连接中"、0 帧 | 先看 `[bridge]` 是否出现**两次** `video capture started`（并发双启动，见 §2.4-12）；再看设备端日志是否卡在 `start startUiTestServer end`（看门狗会自动重试一次，见 §2.4-14） |
+| 切走标签页再切回来黑屏 | 正常不该再出现（面板常驻 + hidden 不卸载，见 §2.4-16）；若仍黑，看 `[bridge]` 有没有 `restart video for new client`（兜底重开是否生效） |
+| 无线投屏卡 | 调设置里的「无线画质」（`--scale`，默认 1/4），见 §2.4-17 |
+| 模拟器上永远 0 帧 | `can not find scrcpy pid` / `libCPHMediaEngine.z.so: cannot open` → 模拟器不支持视频流（见 §2.4-15），换真机 |
 | 视频乱码 | fport 残留规则；重启 sidecar；看首帧 hex 是否以 `00 00 00 01`（annexb）开头 |
 | 触控位置偏移 | 确认按设备原始分辨率换算（demo 3.3）；确认 `--scale` 只影响视频流 |
 | hilog 不滚动 | 限速每秒 60 行（高频时丢弃）；确认 `log` 命令已发、`[bridge] hilog started` 已打印 |

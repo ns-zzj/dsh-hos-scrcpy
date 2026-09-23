@@ -118,6 +118,8 @@ public class Main {
         volatile Runnable onClientCountChanged = null;
         final AtomicInteger nextId = new AtomicInteger(1);
         volatile boolean closed = false;
+        /** 最近一次有客户端连着的时刻（含刚断开）：给"空闲自杀"用，防宿主死后残留进程占着设备 */
+        volatile long lastClientSeen = System.currentTimeMillis();
 
         WsServer(int port) throws IOException {
             this.server = new ServerSocket(port, 50, java.net.InetAddress.getByName("127.0.0.1"));
@@ -131,8 +133,11 @@ public class Main {
                         Socket s = server.accept();
                         WsClient c = new WsClient(this, s, nextId.getAndIncrement());
                         clients.add(c);
-                        if (onClientCountChanged != null) onClientCountChanged.run();
+                        lastClientSeen = System.currentTimeMillis();
+                        // 先启动客户端线程：握手必须立刻得到响应，
+                        // 否则会被 onClientCountChanged（可能触发耗时的投屏启动）堵住。
                         c.start();
+                        notifyClientCountChanged();
                     } catch (Exception e) {
                         if (!closed) System.err.println("[ws] accept error: " + e);
                     }
@@ -142,9 +147,23 @@ public class Main {
             t.start();
         }
 
+        /**
+         * 客户端数量变化的通知。
+         * 必须异步：该回调可能触发 bridge.startVideo()（SDK 启动投屏为阻塞调用，
+         * 在模拟器上可能耗时数秒甚至卡住），同步执行会阻塞 accept 线程或拖慢握手。
+         */
+        void notifyClientCountChanged() {
+            final Runnable cb = onClientCountChanged;
+            if (cb == null) return;
+            Thread t = new Thread(cb, "ws-clients-notify");
+            t.setDaemon(true);
+            t.start();
+        }
+
         void remove(WsClient c) {
             clients.remove(c);
-            if (onClientCountChanged != null) onClientCountChanged.run();
+            lastClientSeen = System.currentTimeMillis();
+            notifyClientCountChanged();
         }
 
         void broadcastBinary(byte[] data) {
@@ -359,10 +378,34 @@ public class Main {
         final String ip;
         final String hdcPath;
         final int scale;
+        final int frameRate;     // SDK 默认 120fps，实测浏览器软解扛不住；由 host 按有线/无线给值
+        final int bitRate;       // SDK 默认 30Mbps
+        final int iFrameInterval; // 关键帧间隔（毫秒）
         final WsServer ws;
         HosRemoteDevice device = null;
         volatile boolean capturing = false;
+        /**
+         * 是否把帧广播给客户端。false = 暂停广播（会话还在跑，只是不推给浏览器）——
+         * 前端不可见时用它省掉浏览器的解码与 MSE 内存；恢复时先 device.requestIDRFrame()
+         * （实测 117ms 就出一个新 IDR，且 SDK 会连 SPS/PPS 一起重发）再置回 true。
+         */
+        volatile boolean broadcasting = true;
         volatile long lastStopTime = 0;
+        /**
+         * 抓屏启停互斥。必须：浏览器一连上就有两条路同时开流——
+         * WsServer 的 0→1 自动开流（onClientCountChanged）与客户端显式发的
+         * {"type":"screen","mode":"video"}；而 capturing 只能在 startCaptureScreen()
+         * 返回后置位，中间几秒两个线程都会以为"没人开流"，于是各自 stop/start 一次，
+         * 后一次 stopCaptureScreen 会打断前一次刚起的抓屏线程
+         * （实测报 java.lang.InterruptedException: sleep interrupted），
+         * 结果 onReady 照常回调但永远 0 帧 → 前端一直停在"连接中"。
+         * 有线时设备端无需部署，自动开流瞬间完成，命令到达时 capturing 已为 true，
+         * 所以只启动一次、表面上"有线没问题"。
+         */
+        final Object capLock = new Object();
+        volatile boolean starting = false;
+        volatile long captureStartTime = 0;
+        final AtomicInteger recoverCount = new AtomicInteger(0);
         // 诊断：帧统计
         final AtomicLong frameCount = new AtomicLong(0);
         final AtomicLong frameBytes = new AtomicLong(0);
@@ -385,6 +428,13 @@ public class Main {
                 if (out == null || out.isEmpty() || out.startsWith("ERROR")) return;
                 for (String line : out.split("\n")) {
                     String t = line.trim();
+                    if (t.isEmpty()) continue;
+                    // ⚠️ 必须只清"本设备"的规则：hdc 的 fport 表是全局的，`-t <sn>` 并不保证输出
+                    // 只有这台设备（实测：查模拟器却把真机的规则也原样打出来）。不过滤的后果是
+                    // ——第二台设备启动时的清理会把第一台正在用的 uitest/scrcpy 规则删掉，
+                    // 先连的那台立刻收不到帧（实测现象：连两台 → 全崩、已加载的也断流）。
+                    // `fport ls` 每行以设备号（序列号或 ip:port）开头，用它过滤。
+                    if (!t.startsWith(sn)) continue;
                     int idx = t.indexOf("tcp:");
                     if (idx < 0) continue;
                     String[] parts = t.substring(idx).split("\\s+");
@@ -399,11 +449,14 @@ public class Main {
             }
         }
 
-        DeviceBridge(String sn, String ip, String hdcPath, int scale, WsServer ws) {
+        DeviceBridge(String sn, String ip, String hdcPath, int scale, int frameRate, int bitRate, int iFrameInterval, WsServer ws) {
             this.sn = sn;
             this.ip = ip;
             this.hdcPath = hdcPath;
             this.scale = scale;
+            this.frameRate = frameRate;
+            this.bitRate = bitRate;
+            this.iFrameInterval = iFrameInterval;
             this.ws = ws;
         }
 
@@ -413,13 +466,17 @@ public class Main {
                 cfg.setIp(ip);
                 cfg.setHdcPath(hdcPath);
                 cfg.setScale(scale);
+                if (frameRate > 0) cfg.setFrameRate(frameRate);
+                if (bitRate > 0) cfg.setBitRate(bitRate);
+                if (iFrameInterval > 0) cfg.setIFrameInterval(iFrameInterval);
                 device = new HosRemoteDevice(cfg);
                 boolean online = device.isOnline();
                 if (!online) {
                     System.err.println("[bridge] device offline: " + sn);
                     return false;
                 }
-                System.out.println("[bridge] device online: " + sn);
+                System.out.println("[bridge] device online: " + sn
+                        + "  scale=" + scale + " frameRate=" + cfg.getParams());
                 return true;
             } catch (Exception e) {
                 System.err.println("[bridge] connect failed: " + e);
@@ -447,10 +504,12 @@ public class Main {
                     if (now - last >= 2000) {
                         if (lastStatTime.compareAndSet(last, now)) {
                             System.out.println("[bridge] frames=" + frameCount.get()
-                                    + " bytes=" + frameBytes.get() + " clients=" + ws.clientCount());
+                                    + " bytes=" + frameBytes.get() + " clients=" + ws.clientCount()
+                                    + (broadcasting ? "" : " [广播已暂停]"));
                         }
                     }
-                    ws.broadcastBinary(buf);
+                    // 暂停广播时照样收帧（编码会话保持活着，回来才能秒开），只是不推给浏览器
+                    if (broadcasting) ws.broadcastBinary(buf);
                 }
 
                 @Override
@@ -470,42 +529,73 @@ public class Main {
 
         void startVideo() {
             if (device == null) return;
-            if (capturing) {
-                System.out.println("[bridge] video already capturing, skip");
-                return; // 去重：避免连接自动开流与显式命令双触发
-            }
-            if (!fportCleaned) {
-                cleanupFportRules(); // 先清残留转发规则，防止随机端口撞上旧规则串到视频通道
-                fportCleaned = true;
+            synchronized (capLock) {
+                if (capturing) {
+                    System.out.println("[bridge] video already capturing, skip");
+                    return; // 去重：避免连接自动开流与显式命令双触发
+                }
+                if (starting) {
+                    System.out.println("[bridge] video start already in progress, skip");
+                    return; // 另一个线程正在部署中，再发一次 stop/start 会打断它
+                }
+                starting = true;
             }
             try {
+                if (!fportCleaned) {
+                    cleanupFportRules(); // 先清残留转发规则，防止随机端口撞上旧规则串到视频通道
+                    fportCleaned = true;
+                }
                 device.stopCaptureScreen();
+                frameCount.set(0);
+                frameBytes.set(0);
+                lastStatTime.set(System.currentTimeMillis());
+                captureStartTime = System.currentTimeMillis();
                 device.startCaptureScreen(makeCallback("video"));
                 capturing = true;
                 System.out.println("[bridge] video capture started");
             } catch (Exception e) {
                 capturing = false;
                 System.err.println("[bridge] start video failed: " + e);
+            } finally {
+                starting = false;
             }
         }
 
         void startImage() {
             if (device == null) return;
-            if (capturing) return;
+            synchronized (capLock) {
+                if (capturing || starting) {
+                    System.out.println("[bridge] capture already running/starting, skip image");
+                    return;
+                }
+                starting = true;
+            }
             try {
+                frameCount.set(0);
+                frameBytes.set(0);
+                lastStatTime.set(System.currentTimeMillis());
+                captureStartTime = System.currentTimeMillis();
                 device.stopImageScreenCapture();
                 device.startImageScreenCapture(makeCallback("image"));
                 capturing = true;
             } catch (Exception e) {
                 capturing = false;
                 System.err.println("[bridge] start image failed: " + e);
+            } finally {
+                starting = false;
             }
         }
 
         void stop() {
             if (device == null) return;
-            capturing = false;
-            lastStopTime = System.currentTimeMillis();
+            synchronized (capLock) {
+                if (starting) {
+                    System.out.println("[bridge] stop ignored: start in progress");
+                    return;
+                }
+                capturing = false;
+                lastStopTime = System.currentTimeMillis();
+            }
             try {
                 device.stopCaptureScreen();
                 device.stopImageScreenCapture();
@@ -513,6 +603,32 @@ public class Main {
                 System.err.println("[bridge] stop failed: " + e);
             }
             System.out.println("[bridge] capture stopped");
+        }
+
+        /**
+         * 看门狗：处理 SDK 偶发的"stream ready 但一帧都不来"（实测真机无线出现过：
+         * 设备端日志停在 start startUiTestServer end 之后不再往下走）。
+         * 只针对"本次开流后一帧都没到"——画面静止时 SDK 本来就不推帧，
+         * 那种情况 frameCount 早就不为 0，不会误判。最多自动重试 3 次。
+         */
+        void watchStream() {
+            Thread t = new Thread(() -> {
+                while (!STOPPED.get()) {
+                    try { Thread.sleep(5000); } catch (InterruptedException e) { return; }
+                    if (!capturing || starting) continue;
+                    long startedAt = captureStartTime;
+                    if (startedAt == 0 || frameCount.get() > 0) continue;
+                    if (ws.clientCount() == 0) continue;
+                    if (System.currentTimeMillis() - startedAt < 15000) continue;
+                    if (recoverCount.get() >= 3) continue;
+                    int n = recoverCount.incrementAndGet();
+                    System.out.println("[bridge] watchdog: 15s 无任何帧，自动重启投屏流（第 " + n + " 次）");
+                    ws.broadcastText(json(false, "投屏流无数据，正在自动重试（第 " + n + " 次）", null));
+                    restartVideo();
+                }
+            }, "stream-watchdog");
+            t.setDaemon(true);
+            t.start();
         }
 
         /** 启动 hilog 实时日志流（hdc shell hilog → WebSocket 文本广播，带限速） */
@@ -590,16 +706,47 @@ public class Main {
         }
 
         /**
-         * 客户端 0→1 时重启视频流：H.264 新编码会话首帧必为 I 帧，
-         * 保证中途加入的客户端立即能解码出画面（否则静止画面下永远等不到关键帧）。
-         * 带防抖：避免快速刷新/多客户端抖动导致 stop/start 交错中断。
+         * 开流/停流是阻塞调用（真机无线实测 3~4 秒才返回），不能在 WebSocket 读取线程里
+         * 同步执行，否则这段时间内的触控/按键/日志命令全部排队等待。
+         */
+        static void runAsync(Runnable r) {
+            Thread t = new Thread(r, "ctl-async");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        /**
+         * 暂停/恢复"广播"（不动抓屏会话）。前端不可见时暂停，省掉浏览器的解码与 MSE 内存；
+         * 恢复前先 requestIDRFrame()：实测约 117ms 就出一个新 IDR，且 SDK 会连 SPS/PPS 一起重发，
+         * 所以不需要我们自己缓存参数集，也不需要用 stop/start 重开会话（那样要 2~4 秒）。
+         */
+        void setBroadcast(boolean on) {
+            if (on == broadcasting) return;
+            if (on && device != null) {
+                try {
+                    device.requestIDRFrame();
+                    System.out.println("[bridge] 已请求 IDR（恢复广播）");
+                } catch (Exception e) {
+                    System.err.println("[bridge] requestIDRFrame 失败: " + e);
+                }
+            }
+            broadcasting = on;
+            System.out.println(on ? "[bridge] 广播已恢复" : "[bridge] 广播已暂停（抓屏会话保持）");
+        }
+
+        /**
+         * 新客户端接入时重启视频流：H.264 新编码会话首帧必为 SPS/PPS+I 帧。
+         * 实测（真机无线，12 秒抓流）：整条流只有 1 个 SPS、1 个 PPS、1 个 IDR，其余 160 帧全是 P 帧；
+         * 中途接入的客户端拿不到参数集与关键帧，只会一直黑屏（再来多少 P 帧都没用）。
+         * 所以刷新页面 / 切走标签页再切回来，必须重开一次编码会话。
+         * 防抖：刚停过就等窗口过去再重开，而不是直接放弃（放弃就又会黑屏）。
          */
         void restartVideo() {
             if (device == null) return;
-            long now = System.currentTimeMillis();
-            if (now - lastStopTime < 1000) {
-                System.out.println("[bridge] restart throttled (recently stopped)");
-                return;
+            long wait = 1000 - (System.currentTimeMillis() - lastStopTime);
+            if (wait > 0) {
+                System.out.println("[bridge] restart 等待 " + wait + "ms（刚停过，防抖）");
+                try { Thread.sleep(wait); } catch (InterruptedException ignored) { return; }
             }
             System.out.println("[bridge] restart video for new client (fresh I-frame)");
             stop();
@@ -645,14 +792,22 @@ public class Main {
                     case "screen": {
                         String mode = o.get("mode").getAsString();
                         if ("stop".equals(mode)) {
-                            stop();
-                            return json(true, "capture stopped", null);
+                            runAsync(() -> stop());
+                            return json(true, "stopping capture", null);
                         } else if ("video".equals(mode)) {
-                            startVideo();
+                            runAsync(() -> startVideo());
                             return json(true, "starting video", null);
                         } else if ("image".equals(mode)) {
-                            startImage();
+                            runAsync(() -> startImage());
                             return json(true, "starting image", null);
+                        } else if ("pause".equals(mode)) {
+                            // 前端不可见：停广播（抓屏会话留着，回来才能秒开）
+                            runAsync(() -> setBroadcast(false));
+                            return json(true, "broadcast paused", null);
+                        } else if ("resume".equals(mode)) {
+                            // 前端重新可见：请求关键帧 + 恢复广播
+                            runAsync(() -> setBroadcast(true));
+                            return json(true, "broadcast resumed", null);
                         }
                         return json(false, "unknown mode: " + mode, null);
                     }
@@ -723,11 +878,25 @@ public class Main {
         try { scale = Integer.parseInt(opts.getOrDefault("scale", "2")); } catch (Exception e) { scale = 2; }
         int port;
         try { port = Integer.parseInt(opts.getOrDefault("port", "0")); } catch (Exception e) { port = 0; }
+        // 编码参数：SDK 默认 frameRate=120 / bitRate=30Mbps，对网页软解来说离谱；
+        // 0 或缺省 = 不覆盖（保持 SDK 默认）。host 会按有线/无线分别给值。
+        int frameRate;
+        try { frameRate = Integer.parseInt(opts.getOrDefault("frame-rate", "0")); } catch (Exception e) { frameRate = 0; }
+        int bitRate;
+        try { bitRate = Integer.parseInt(opts.getOrDefault("bit-rate", "0")); } catch (Exception e) { bitRate = 0; }
+        int iFrameInterval;
+        try { iFrameInterval = Integer.parseInt(opts.getOrDefault("ifr", "0")); } catch (Exception e) { iFrameInterval = 0; }
+        // 空闲自杀：超过这个秒数没有任何客户端连着就退出（0=关）。
+        // 必要性：宿主进程（dsh web）死掉时子进程不会跟着死（Windows 上尤其明显），
+        // 残留的 sidecar 会占着设备端唯一的投屏服务，导致**下一次连接一直黑屏**（实测踩过）。
+        int idleExit;
+        try { idleExit = Integer.parseInt(opts.getOrDefault("idle-exit", "300")); } catch (Exception e) { idleExit = 300; }
 
         if (!selftest) {
             sn = resolveSn(sn, hdc);
             if (sn == null) {
-                System.err.println("usage: Main [--sn <sn|auto>] [--hdc <path>] [--port <ws>] [--scale <n>] | Main --selftest");
+                System.err.println("usage: Main [--sn <sn|auto>] [--hdc <path>] [--port <ws>] [--scale <n>]"
+                        + " [--frame-rate <fps>] [--bit-rate <bps>] [--ifr <ms>] | Main --selftest");
                 System.exit(2);
             }
         }
@@ -735,7 +904,7 @@ public class Main {
         WsServer ws = new WsServer(port);
         ws.start();
 
-        DeviceBridge bridge = selftest ? null : new DeviceBridge(sn, ip, hdc, scale, ws);
+        DeviceBridge bridge = selftest ? null : new DeviceBridge(sn, ip, hdc, scale, frameRate, bitRate, iFrameInterval, ws);
 
         // WebSocket 事件绑定
         ws.onText = text -> {
@@ -756,13 +925,20 @@ public class Main {
             ws.broadcastText(resp);
         };
         ws.onBinary = data -> { /* 客户端上行二进制忽略 */ };
+        final AtomicInteger lastClients = new AtomicInteger(0);
         ws.onClientCountChanged = () -> {
-            System.out.println("[ws] clients: " + ws.clientCount());
+            int count = ws.clientCount();
+            int prev = lastClients.getAndSet(count);
+            System.out.println("[ws] clients: " + count + " (prev " + prev + ")");
             if (bridge == null) return;
-            // 0→1 时确保流在跑即可；不自动重启视频流——
-            // 重启会 stopCaptureScreen 关闭 uitest 控制通道（Hypium 输入通道）且拖慢体验，
-            // 新客户端缺 I 帧的情况由“请持续滑动手机更新画面”提示解决。
-            if (ws.clientCount() > 0 && !bridge.capturing) bridge.startVideo();
+            if (count > 0 && !bridge.capturing) {
+                bridge.startVideo(); // 首客户端且流没在跑：起一条
+            } else if (count > prev && bridge.capturing) {
+                // 中途接入的客户端（刷新页面 / 切标签页回来 / 第二个窗口）：
+                // 这条流整场只有一个 IDR 且不重发 SPS/PPS，不回放编码会话的解码器永远黑屏，
+                // 所以必须重开一次编码会话把新的 SPS/PPS+IDR 推给它。
+                bridge.restartVideo();
+            }
         };
 
         // 先连接设备，成功后才广播 ready（否则客户端会在 device 就绪前连接并发命令）
@@ -771,6 +947,7 @@ public class Main {
                 System.err.println("{\"error\":\"device offline\"}");
                 System.exit(3);
             }
+            bridge.watchStream();
         }
 
         // 就绪信息（供 DSH Host 解析）
@@ -779,6 +956,27 @@ public class Main {
 
         if (selftest) {
             System.out.println("[selftest] ws listening on 127.0.0.1:" + ws.port);
+        }
+
+        // 空闲自杀（防残留）：没有任何客户端连着超过 idleExit 秒就自己退出。
+        // 实测教训：宿主进程死后子进程不会跟着死，残留的 sidecar 会一直占着设备端唯一的投屏服务，
+        // 使**下一次连接一直黑屏**（本机曾同时躺着 3 个残留 java 进程，共 ~900MB）。
+        if (idleExit > 0) {
+            final int idleExitSec = idleExit; // lambda 只能捕获 effectively final
+            Thread idle = new Thread(() -> {
+                while (!STOPPED.get()) {
+                    try { Thread.sleep(5000); } catch (InterruptedException e) { return; }
+                    if (ws.clientCount() > 0) continue;
+                    long idleMs = System.currentTimeMillis() - ws.lastClientSeen;
+                    if (idleMs >= idleExitSec * 1000L) {
+                        System.out.println("[bridge] 空闲 " + (idleMs / 1000) + " 秒无客户端，自动退出（防残留占用设备）");
+                        System.out.flush();
+                        System.exit(0);
+                    }
+                }
+            }, "idle-exit");
+            idle.setDaemon(true);
+            idle.start();
         }
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
