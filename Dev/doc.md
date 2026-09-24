@@ -49,7 +49,7 @@ DSH 插件（Host 半区）负责 `spawn` 拉起 sidecar，解析就绪行拿到
 | `--sn <sn\|auto>` | auto | 设备序列号；为空或 auto 时用 `hdc list targets` 自动发现唯一设备 |
 | `--hdc <path>` | `hdc` | hdc 可执行文件路径 |
 | `--port <n>` | `0` | WebSocket 监听端口，0 = 随机端口（DSH 插件即用随机端口） |
-| `--scale <n>` | `2` | 视频缩放系数（SDK 侧降采样） |
+| `--scale <n>` | `2` | 视频缩放系数（SDK 侧降采样：**宽高各除以 n**，上限 5） |
 | `--ip <ip>` | `127.0.0.1` | 设备连接地址（默认本机 hdc 回环；勿改） |
 | `--selftest` | 关 | 自检模式：只启动 WS 服务、只响应 `ping`，不连设备 |
 
@@ -130,8 +130,12 @@ DSH 插件（Host 半区）负责 `spawn` 拉起 sidecar，解析就绪行拿到
       新会话首帧必为 SPS/PPS+IDR。这条只在"连接真的断了重连"时兜底，正常切标签页不会触发。
 17. **有线/无线识别 + 无线降画质**：`isWirelessDevice()` 解析 `hdc list targets -v` 中该设备那行的
     传输类型（实测输出：`192.168.1.241:35147		TCP	Connected	localhost	hdc`），
-    取不到时用 `ip:port` 形态兜底。无线时 `--scale` 用配置 `wirelessScale`（默认 4），有线固定 2；
-    档位越大视频流越小越省流（1320 宽的画面 1/2 → 660，1/4 → 330）。
+    取不到时用 `ip:port` 形态兜底。**无线固定 `--scale 4`、有线固定 2**（2026-09-24 起：配置里的
+    `wirelessScale` 已删除，不再进设置界面 —— 见 `PROGRESS.md` §10.3）。
+    `scale=N` 是**宽高各除以 N**（实测：1320×2856 的设备在 `scale=2` 下 SPS 为 660×1428，两个方向都精确
+    2.00 → 所以 `scale=4` 是 330×714，1/4 长宽 = **1/16 像素**）；设备端 `.so` 里写着 `Set max value 5`
+    （超限被拒、非法值回落 1）。
+    帧率实测（作者环境）：有线 `scale=2` 稳 60fps、无线 `scale=4` 稳 30fps、`scale=1` 原像素约 15fps。
     `device:connect` 会把 `wireless` / `scale` 返回给前端，面板头部显示「无线 · 1/4」这类标记。
 
 ### 2.5 编译与同步
@@ -215,7 +219,7 @@ java -cp "<SDK jar路径>;<out目录>" Main --hdc "<hdc路径>" --port 18999
 | 连上但无帧 | 静止画面正常；请滑动手机；看 `[bridge]` 是否打印 `stream ready` |
 | 连上后一直"连接中"、0 帧 | 先看 `[bridge]` 是否出现**两次** `video capture started`（并发双启动，见 §2.4-12）；再看设备端日志是否卡在 `start startUiTestServer end`（看门狗会自动重试一次，见 §2.4-14） |
 | 切走标签页再切回来黑屏 | 正常不该再出现（面板常驻 + hidden 不卸载，见 §2.4-16）；若仍黑，看 `[bridge]` 有没有 `restart video for new client`（兜底重开是否生效） |
-| 无线投屏卡 | 调设置里的「无线画质」（`--scale`，默认 1/4），见 §2.4-17 |
+| 无线投屏卡 | 无线固定 1/4 画质（`--scale 4`，见 §2.4-17）；**设置里已没有画质档位**（2026-09-24 删除） |
 | 模拟器上永远 0 帧 | `can not find scrcpy pid` / `libCPHMediaEngine.z.so: cannot open` → 模拟器不支持视频流（见 §2.4-15），换真机 |
 | 视频乱码 | fport 残留规则；重启 sidecar；看首帧 hex 是否以 `00 00 00 01`（annexb）开头 |
 | 触控位置偏移 | 确认按设备原始分辨率换算（demo 3.3）；确认 `--scale` 只影响视频流 |
