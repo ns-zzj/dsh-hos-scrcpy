@@ -46,7 +46,7 @@
 |---|---|
 | DSH 运行环境 | 电脑端（Windows / macOS / Linux）的 DeepSeek Harness；插件经包安装后随 web profile 常驻 |
 | Java 8+ | sidecar 桥接程序运行环境 |
-| hdc | DevEco Studio 自带（`<DevEco>/sdk/default/openharmony/toolchains/hdc.exe`） |
+| hdc | DevEco Studio 自带，位于 DevEco 安装目录下的 `sdk/default/openharmony/toolchains/hdc.exe` |
 | 鸿蒙手机 | 开启开发者模式 + USB 调试（或 `hdc tconn` 无线连接） |
 
 ## 目录结构
@@ -74,15 +74,19 @@ dsh-hos-scrcpy/
 
 ## 快速开始
 
-以插件包（tgz）安装，重启 DSH 后插件常驻：
+一条命令装进 web profile（从仓库直接装，不用先下载文件）：
 
-1. 从 Release 下载 `dsh-hos-scrcpy-<版本>.tgz`，或在项目根目录执行 `npm pack` 生成
-2. 安装到 web profile：`dsh plugin --profile web add <tgz 路径>`
-3. 重启 `dsh web`，会话右上角出现「**hos-scrcpy 菜单**」按钮即成功
-4. 「hos-scrcpy 菜单」→ 选中设备 → 点「投屏」→ 等待部署（首次约 10 秒）→ **右侧栏自动展开成该设备的投屏标签页**（标签上写着设备名）：手机画面 + 按键
-5. 换第二台设备：菜单里点它那行的「投屏」→ 新建第二张标签页；两台同时在线，点哪行就跳哪张标签页；某台要收工，点它那行的「断开」（只断这台，别的照常放）
-6. 投屏面板点「日志▸」查看 hilog 实时日志
-7. 投屏面板点「设置」→ 打开「允许截图」/「允许控制」「允许按键」「允许输入」即可让 AI 识别并操作屏幕（每项可选"需要确认"或"无需确认"；控制/按键/输入依赖允许截图）。同一弹层里还能换识别模型、调有线/无线帧率
+`dsh plugin --profile web add github:ns-zzj/dsh-hos-scrcpy`
+
+重启 `dsh web` 后插件常驻，会话右上角出现「**hos-scrcpy 菜单**」按钮即成功。
+
+> 这一步装不上？改用 Release 里的 tgz：下载后在存放它的目录里执行
+> `dsh plugin --profile web add ./dsh-hos-scrcpy-2.1.1.tgz`
+
+1. 「hos-scrcpy 菜单」→ 选中设备 → 点「投屏」→ 等待部署（首次约 10 秒）→ **右侧栏自动展开成该设备的投屏标签页**（标签上写着设备名）：手机画面 + 按键
+2. 换第二台设备：菜单里点它那行的「投屏」→ 新建第二张标签页；两台同时在线，点哪行就跳哪张标签页；某台要收工，点它那行的「断开」（只断这台，别的照常放）
+3. 投屏面板点「日志▸」查看 hilog 实时日志
+4. 投屏面板点「设置」→ 打开「允许截图」/「允许控制」「允许按键」「允许输入」即可让 AI 识别并操作屏幕（每项可选"需要确认"或"无需确认"；控制/按键/输入依赖允许截图）。同一弹层里还能换识别模型、调有线/无线帧率
 
 > 多设备时 AI 工具作用于**当前聚焦的那台**（即面板正在显示画面的那台）；切到哪台的面板，AI 就操作哪台。
 
