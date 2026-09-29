@@ -1,8 +1,11 @@
 # dsh-hos-scrcpy bundle patch
 #
-# 该包以「bundle」形式挂载：把包加入 profile 的 dsh.profile.bundles 后，
-# 这一层 patch 会向组合树插入插件行（宿主半区 + 浏览器半区）。
-# 详细安装步骤见 README.md。
+# 该包以「bundle」形式挂载：把包加入 profile 的 dsh.profile.bundles 后，这一层 patch 插入自己那一行。
+#
+# ⚠️ scrcpy-core 那一行由 dsh-scrcpy-core 自己的层插，这里【不许】插（两个层各插一条同 id 会
+#    以 `duplicate loader entry id` 被拒、启动直接失败，见 core/cordis.patch.yml 的说明）。
+#
+# ⚠️ 3.0.0 起本包**没有浏览器半区**（不注册 UI、不注册工具、不写提示词），所以 package.json 里没有 dsh.client。
 - insert:
     - id: hos-scrcpy
       name: dsh-hos-scrcpy

@@ -484,6 +484,51 @@ public class Main {
             }
         }
 
+        // ---- GOP 缓存：最新配置（单独存）+ 最近一次 IDR 起到现在的帧（**不设上限**）----
+        // 【用户口述 2026-09-29】"不设上限了，就缓存 SPS PPS + 最近一次 idr 到现在的 p 帧就行了"
+        //   原因：IDR 间隔可能十几秒，放视频时 60fps 吃满，按帧数/字节封顶会把关键帧挤掉（踩过两次，见 lab 日志）。
+        // 代价：一个 GOP 的裸数据量 ≈ 码率 × IDR 间隔（30Mbps、10 秒 ≈ 37MB），只在有暂停需求时才用得上。
+        private byte[] gopCfg = null, gopPps = null;
+        private final java.util.ArrayDeque<byte[]> gopFrames = new java.util.ArrayDeque<>();
+
+        /** 扫 Annex-B 起始码，返回这段里出现的 NAL 类型（7=SPS 8=PPS 5=IDR） */
+        private static java.util.List<Integer> nalTypes(byte[] b) {
+            java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+            int i = 0;
+            while (i + 3 < b.length) {
+                if (b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1) { out.add(Integer.valueOf(b[i + 3] & 0x1F)); i += 3; }
+                else if (i + 4 < b.length && b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 0 && b[i + 3] == 1) { out.add(Integer.valueOf(b[i + 4] & 0x1F)); i += 4; }
+                else i++;
+            }
+            return out;
+        }
+
+        private synchronized void gopOnFrame(byte[] buf) {
+            java.util.List<Integer> ts = nalTypes(buf);
+            if (ts.contains(Integer.valueOf(7))) { gopCfg = buf; gopPps = null; }   // 新配置（PPS 常与 SPS 同帧）
+            else if (ts.contains(Integer.valueOf(8))) { gopPps = buf; }             // 单独来的 PPS
+            if (ts.contains(Integer.valueOf(5))) {                                  // 关键帧 → 从这里重开一段
+                gopFrames.clear();
+                gopFrames.addLast(buf);
+            } else if (!gopFrames.isEmpty()) {
+                gopFrames.addLast(buf);                                             // 关键帧之后的帧一直攒，不设上限
+            }
+        }
+
+        /** 补发：配置 + 最近一次 IDR 起到现在的帧（供浏览器重建解码器用） */
+        synchronized void flushGop() {
+            if (gopCfg == null || gopFrames.isEmpty()) {
+                System.out.println("[bridge] GOP 缓存不完整（有配置=" + (gopCfg != null) + " 有关键帧=" + !gopFrames.isEmpty() + "），跳过补发");
+                return;
+            }
+            int n = 0;
+            long bytes = 0;
+            ws.broadcastBinary(gopCfg); n++; bytes += gopCfg.length;
+            if (gopPps != null) { ws.broadcastBinary(gopPps); n++; bytes += gopPps.length; }
+            for (byte[] f : gopFrames) { ws.broadcastBinary(f); n++; bytes += f.length; }
+            System.out.println("[bridge] 补发 GOP：配置 + " + gopFrames.size() + " 帧，共 " + n + " 帧 " + bytes + " 字节");
+        }
+
         ScreenCapCallback makeCallback(String mode) {
             return new ScreenCapCallback() {
                 @Override
@@ -499,6 +544,7 @@ public class Main {
                     }
                     frameCount.incrementAndGet();
                     frameBytes.addAndGet(buf.length);
+                    gopOnFrame(buf);   // 维护 GOP 缓存（暂停期间也照收，所以缓存里始终是最新的一段）
                     long now = System.currentTimeMillis();
                     long last = lastStatTime.get();
                     if (now - last >= 2000) {
@@ -716,21 +762,19 @@ public class Main {
         }
 
         /**
-         * 暂停/恢复"广播"（不动抓屏会话）。前端不可见时暂停，省掉浏览器的解码与 MSE 内存；
-         * 恢复前先 requestIDRFrame()：实测约 117ms 就出一个新 IDR，且 SDK 会连 SPS/PPS 一起重发，
-         * 所以不需要我们自己缓存参数集，也不需要用 stop/start 重开会话（那样要 2~4 秒）。
+         * 暂停/恢复"广播"（不动抓屏会话）。前端不可见时暂停，省掉浏览器的解码与 MSE 内存。
+         *
+         * 【2026-09-28 实测修正】这里原本还调了一句 device.requestIDRFrame()，注释声称"实测约 117ms
+         * 就出一个新 IDR"。但那个接口在 hosScrcpy-1.0.18-beta 里是**空实现**：
+         *   - HosRemoteDevice.class 的常量池里**没有** onRequestIDRFrame（Java 有调用必留方法名）；
+         *   - gRPC 生成的客户端三套 stub（异步/阻塞/未来）里**都没有**这个方法，只有协议声明和服务端基类。
+         * 也就是说"请求关键帧"这条路客户端根本没接上（配套事实：整条流只有一个 IDR，见下面的说明）。
+         * 所以删掉这行调用 —— 它在功能上一直是空动作，留着只会误导后来人。
          */
         void setBroadcast(boolean on) {
             if (on == broadcasting) return;
-            if (on && device != null) {
-                try {
-                    device.requestIDRFrame();
-                    System.out.println("[bridge] 已请求 IDR（恢复广播）");
-                } catch (Exception e) {
-                    System.err.println("[bridge] requestIDRFrame 失败: " + e);
-                }
-            }
             broadcasting = on;
+            if (on) flushGop();   // 恢复广播：先把"配置+关键帧"补上，浏览器才接得住（暂停期间转屏就靠这个）
             System.out.println(on ? "[bridge] 广播已恢复" : "[bridge] 广播已暂停（抓屏会话保持）");
         }
 

@@ -1,29 +1,21 @@
 {
-  "name": "dsh-hos-scrcpy",
-  "version": "2.1.1",
-  "description": "DSH 鸿蒙投屏控制插件（静态 npm 包版 v2.0）：设备发现 / 实时投屏 / 触控操作 / 系统按键 / hilog 日志 / AI 截图识别与操控（控件清单 / 点击 / 长按 / 文本输入）",
+  "name": "@nszzj/dsh-hos-scrcpy",
+  "version": "3.0.0",
+  "description": "DSH-scrcpy 鸿蒙 Provider --- DSH-scrcpy HarmonyOS Provider",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
-    "./client": "./client/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime"
-      ]
     }
   },
   "files": [
     "lib",
-    "client",
     "resources",
     "cordis.patch.yml",
     "README.md",
