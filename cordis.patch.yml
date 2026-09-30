@@ -8,4 +8,4 @@
 # ⚠️ 3.0.0 起本包**没有浏览器半区**（不注册 UI、不注册工具、不写提示词），所以 package.json 里没有 dsh.client。
 - insert:
     - id: hos-scrcpy
-      name: @nszzj/dsh-hos-scrcpy
+      name: "@nszzj/dsh-hos-scrcpy"
