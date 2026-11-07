@@ -1,47 +1,84 @@
-# 开发资料（本目录）
+# Dev —— Java sidecar
 
-> **基于 core 开发 provider** → [core/Dev/doc.md](https://github.com/ns-zzj/dsh-scrcpy-core/blob/main/Dev/doc.md)
-> （契约、core 会调你的动作、你要上报什么、文案与语言规则、画面四件套、坐标与画面尺寸的坑 —— 想给别的平台接一个 provider 就看那份。）
+`Dev/src/Main.java` 是每台设备一个的 Java 进程（provider 负责 `spawn`）。它只做四件事：
 
-## 架构
+- 用 `hdc` 连上设备，起投屏、取画面；
+- 把 H.264 二进制帧广播给浏览器（WebSocket）；
+- 收浏览器的触控 / 按键 / shell / 布局 / 尺寸命令；
+- 缓存"配置 + 关键帧"，新客户端接入或暂停恢复时补发。
 
-```mermaid
-flowchart TB
-  CL["DSH 网页（core 的浏览器半区）<br/>菜单 · 每设备一张投屏标签页 · jmuxer 解码<br/>触控 / 按键"]
-  CO["DSH Host（core 插件）<br/>配置 · 环境检测 · 设备发现 · AI 工具与提示词<br/>把动作路由给 provider"]
-  PR["鸿蒙 provider（本包）<br/>只负责：起停 sidecar · 环境检测 · 连接配置 · 上报设备"]
-  SC["Java sidecar（每设备一个进程）<br/>Main --sn SN · ws://127.0.0.1:port<br/>H.264 帧广播 · 触控按键 · GOP 缓存补发"]
-  PH(("鸿蒙设备"))
+DSH 插件本体不在这里：宿主半区是 `lib/index.js`，浏览器半区在 core。
 
-  CL <-->|"host.call · RPC"| CO
-  CO -->|"actions / handlers"| PR
-  PR -->|"spawn 拉起"| SC
-  SC <-->|hdc| PH
-  CL <==>|"WebSocket 直连（视频帧 / 触控 / 按键，不经 provider）"| SC
+## 文件
+
+```
+Dev/src/Main.java                   源码
+resources/out/*.class               编译产物，**随包发布**（provider 直接 java -cp 跑）
+resources/hosScrcpy-1.0.18-beta.jar HOScrcpy SDK
 ```
 
-**关键点**：浏览器半区**直连 sidecar** 收发视频与触控，provider **不在流路径里** —— 它只负责把 sidecar 拉起来、报设备、报配置。
+`resources/out/` 是运行时真正加载的那份；只改 `src/Main.java` 不重编，等于没改。
 
-## 开发约定
+## 编译
 
-- **sidecar 逻辑**改 `Dev/src/Main.java`；编译产物要同步到 `resources/out/`，**必须用 `--release 8`**（原版 class 目标是 Java 8，用新 JDK 默认编出 69/61 会让老 Java 起不来）；命令见 `doc-sidecar.md`。
-- **协议改动**要三处同步：`Dev/src/Main.java`（收发）、`Dev/demo/` 里的探针/测试页（验证）、以及 core 浏览器半区里对应那段（消费）。
-- **改了 Java 必须重启用到它的进程**（demo 与插件都是启动时加载）。
-- 改完 sidecar 要在 demo 里先独立验一遍，再在 DSH 里验，最后才重新打包。
+```
+javac -encoding UTF-8 -nowarn --release 8 -cp hos/resources/hosScrcpy-1.0.18-beta.jar -d hos/resources/out hos/Dev/src/Main.java
+```
 
-## Dev/demo/ —— 独立测试件（不依赖 DSH，也不进 npm 包）
+**必须 `--release 8`**：当前产物是 class 版本 52（Java 8）。用 JDK 25 默认会编出 69，Java 8~16 的运行时直接 `UnsupportedClassVersionError`。
 
-| 文件 | 干什么 | 怎么跑 |
+编完核对：`Main.class` 第 7~8 字节应为 `00 34`（52）。
+
+**改了 Java 要重启用到它的进程** —— demo 和插件都是启动时加载。
+
+## 命令行
+
+```
+java -cp <jar>;resources/out Main --sn <sn> --hdc <path> [--port 0] [--scale 2]
+     [--frame-rate <fps>] [--bit-rate <bps>] [--ifr <ms>] [--idle-exit 300]
+java -cp <jar>;resources/out Main --selftest [--port 0]
+```
+
+| 参数 | 默认 | 说明 |
 |---|---|---|
-| `browser-demo.mjs` | 起 sidecar + 递一个网页（jmuxer + `<video>`），带「暂停 / 恢复」按钮 —— 用来验证"**暂停中转屏 → 恢复时补发 GOP**"和"**转屏时先换 jmuxer 再喂**" | `node hos/Dev/demo/browser-demo.mjs` → 浏览器打开它打印的 `http://127.0.0.1:8899/` |
-| `probe-stream.mjs` | 命令行探针：起 sidecar、连它的 WS、解 SPS 拿**真实编码尺寸**、按时间线打 SPS/PPS/IDR | `node hos/Dev/demo/probe-stream.mjs [秒数]` |
-| `probe-pause-rotate.mjs` | 复现"暂停 → 转屏 → 恢复"：每 2 秒问一次尺寸，**检测到方向变了自动恢复**，恢复后再看 20 秒有没有新 SPS | `node hos/Dev/demo/probe-pause-rotate.mjs [scale]` |
-| `index-2x.html` | 2.x 时代的独立测试页（历史遗留，还能打开看协议） | 浏览器直接打开 |
-| `jmuxer.min.js` | 上面那些 demo 页用的 jmuxer（与插件同源） | — |
+| `--sn` | 自动发现唯一设备 | 设备号 |
+| `--hdc` | `hdc` | hdc 路径 |
+| `--ip` | `127.0.0.1` | hdc 回环地址，别改 |
+| `--port` | `0` | WS 端口，0 = 随机 |
+| `--scale` | `2` | 宽高各除以 n（上限 5） |
+| `--frame-rate` | `0`（SDK 默认） | 帧率上限 |
+| `--bit-rate` | `0`（SDK 默认） | 码率 |
+| `--ifr` | `0` | 关键帧间隔 |
+| `--idle-exit` | `300` | 空闲多久退出（秒） |
+| `--selftest` | 关 | 只起 WS、只响应 ping，不连设备 |
 
-跑之前设好环境变量：**`HOS_SN`**（必填，`hdc list targets` 里的设备号），可选 `HOS_HDC` / `HOS_JAVA`（不设就用 PATH 里的 `hdc` / `java`，需要 Java 8+）。设备要连着。
+## 协议
 
-## 另外两个文件
+- **二进制帧** = H.264 原始字节，广播给所有客户端。
+- **文本帧（浏览器 → sidecar）**：
+  `{"type":"touch","event":"down|move|up","x":..,"y":..}`、
+  `{"type":"key","name":"back|home|volumeUp|volumeDown|power"}`、
+  `{"type":"shell","cmd":"..."}`（白名单）、`{"type":"screen","mode":"video|pause|resume"}`、
+  `{"type":"layout"}`、`{"type":"size"}`、`{"type":"log","on":true}`、`{"type":"ping"}`。
+- **文本帧（sidecar → 浏览器）**：`{"ok":true,...}` / `{"ok":false,"error":...}`，以及
+  `{"msg":"size","data":"宽x高"}`、`{"msg":"log","data":"..."}`。
+- **就绪行**：连上设备后 stdout 打印 `{"ready":true,"port":N,"selftest":false}`，provider 解析它拿端口。
+  连不上会先报错再 `System.exit(3)`，**不会打印 ready**。
 
-- **`doc-sidecar.md`** —— sidecar（`Dev/src/Main.java`）的协议、编译（必须 `--release 8`）、踩坑记录；**改 Java 前先看它**。
-- **`Dev/src/Main.java`** —— sidecar 源码（DSH ⇄ 设备的 Java 桥）。编译产物在 `resources/out/`，**随包发布**。
+## 改之前必读
+
+1. **`sendFrame` 必须 `synchronized`**：帧线程和控制响应线程会并发写同一个 socket，不加锁就字节交错。
+2. **帧长编码用 `long` 移位**：超过 31 位用 `int` 会取低 5 位，长度直接错。
+3. **shell 白名单** `SHELL_ALLOW_PREFIX`：加新命令类型必须同时加前缀。
+4. **按键走 `uinput -K -d <码> -u <码>`**：HOME=1、BACK=2、VOL_UP=16、VOL_DOWN=17、POWER=18（以 SDK 的 `oh_key_code.h` 为准）。
+5. **`cleanupFportRules()`**：SDK 多次部署会在设备端残留 `fport` 规则，新端口撞上就会连到错误通道（画面乱码）。画面异常先查这里。
+6. **静止不推帧**：SDK 只在画面变化时回调 `onData`，"连着但没帧"是正常的，前端提示用户滑一下。
+7. **新客户端加入不重启视频流**：只在 0→1 时保证流在跑，中途加入缺 I 帧由 GOP 补发兜底。
+8. **开流必须互斥且只启动一次**：`onClientCountChanged` 和显式 `screen` 命令会同时开流；`capturing` 要等 `startCaptureScreen()` 返回才置位（真机无线 3~4 秒），这段窗口里两个线程都会各起一次，后一次打断前一次。现象是连续两行 `capture started` 然后永远 0 帧。用 `capLock` + `starting` 挡住。
+9. **`screen` 命令异步执行**：开/停流是阻塞调用，不能在 WS 读线程里同步跑，否则触控按键全排队。
+10. **整条流只有一个关键帧**：真机实测 SPS×1、PPS×1、IDR×1、P帧×160，之后不再重发。新观众能立刻解码靠的是 sidecar 缓存补发。
+11. **模拟器不支持视频流**：SDK 在模拟器上找不到 `scrcpy pid`，一帧都没有。这是 ROM 限制。
+
+## 排查顺序
+
+画面黑 / 乱码 → 先看 `fport` 残留，再看是不是 `capture started` 出现了两次。都没有，再看设备端有没有画面变化（静止本来就不推帧）。

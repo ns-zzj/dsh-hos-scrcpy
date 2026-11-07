@@ -1,6 +1,6 @@
 {
   "name": "@nszzj/dsh-hos-scrcpy",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "DSH-scrcpy 鸿蒙 Provider --- DSH-scrcpy HarmonyOS Provider",
   "type": "module",
   "main": "lib/index.js",
@@ -20,7 +20,6 @@
     "resources",
     "cordis.patch.yml",
     "README.md",
-    "README.en.md",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {

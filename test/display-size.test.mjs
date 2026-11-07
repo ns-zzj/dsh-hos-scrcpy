@@ -36,7 +36,12 @@ ScreenCombination:             5
 Rotation:                      0
 `
 
-const LANDSCAPE = PORTRAIT.replace('Rotation:                      0', 'Rotation:                      90')
+// 横屏实测（2026-11-06 真机）：activeModes 不变，只有 Rotation 从 0 变 3（枚举，3 = 270°）
+const LANDSCAPE = PORTRAIT.replace('Rotation:                      0', 'Rotation:                      3')
+// 90° 同理
+const LANDSCAPE_90 = PORTRAIT.replace('Rotation:                      0', 'Rotation:                      1')
+// 180° 不需要换
+const UPSIDE_DOWN = PORTRAIT.replace('Rotation:                      0', 'Rotation:                      2')
 
 const VIRTUAL_FIRST = `
 DisplayId:                     1165
@@ -50,9 +55,19 @@ test('竖屏：取内部屏的 activeModes 尺寸', async () => {
   assert.deepEqual(size, { width: 1320, height: 2856 })
 })
 
-test('横屏（Rotation 90）：宽高对调', async () => {
+test('横屏 270°（Rotation=3）：宽高对调', async () => {
   const size = await loader(LANDSCAPE)('sn')
   assert.deepEqual(size, { width: 2856, height: 1320 })
+})
+
+test('横屏 90°（Rotation=1）：宽高对调', async () => {
+  const size = await loader(LANDSCAPE_90)('sn')
+  assert.deepEqual(size, { width: 2856, height: 1320 })
+})
+
+test('倒置 180°（Rotation=2）：不换', async () => {
+  const size = await loader(UPSIDE_DOWN)('sn')
+  assert.deepEqual(size, { width: 1320, height: 2856 })
 })
 
 test('投屏虚拟屏排在前面时，仍然取 isInternal 的那块', async () => {

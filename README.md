@@ -2,8 +2,6 @@
 
 **DSH 的鸿蒙投屏 provider** —— 让 DSH 通过 `hdc` 连上鸿蒙设备：看画面、点/滑、按键、输入文字、给 AI 看。
 
-> 中文 | **[English](./README.en.md)**
-
 界面、AI 工具、设备与焦点、路由、门槛**全在 core 里**；本包只负责"**这台设备怎么连、怎么点、怎么出画面**"。
 
 ## 这是什么
@@ -68,22 +66,16 @@ resources/hosScrcpy-1.0.18-beta.jar   HOScrcpy SDK（第三方，见 THIRD_PARTY
 resources/out/                        sidecar 编译产物（Main 及内部类），随包发布
 cordis.patch.yml                      DSH 插件清单
 Dev/src/Main.java                     sidecar 源码（DSH ⇄ 设备的 Java 桥）
-Dev/demo/                             独立测试件（不依赖 DSH，也不进 npm 包）
-Dev/doc.md                            开发资料：架构图 / 开发约定 / 各 demo 用途
-Dev/doc-sidecar.md                    sidecar 协议、编译（必须 --release 8）、踩坑
+Dev/doc.md                            sidecar 的编译（必须 --release 8）、协议、踩坑
 ```
 
 ## 已验证环境
 
-只有下表列出的组合是**真机验过**的；没列的组合，能用是运气，不能用请提 issue。
+在一台**鸿蒙 7.0 零售机**（未 root、未改系统）上验过：投屏画面、鼠标点按与拖拽、底部五个固定键、转屏、切页暂停恢复、电脑键盘输入、编辑键、读剪贴板。
 
-| 设备 | 系统 | 内核 | 验证范围 |
-|---|---|---|---|
-| SLY-AL00 | 鸿蒙 7.0.0.109（SP6C00E105R3P3），API 26 | HongMeng Kernel 1.13.0 | 投屏画面、鼠标点按与拖拽、底部五个固定键、转屏、切页暂停恢复 |
+早期在另一台鸿蒙 6.x 设备上验过：投屏、点击与长按、按键、文字输入、转屏、切页暂停恢复、多设备并行。
 
-早期在另一台鸿蒙 6.x 的设备上也验过（投屏 / 点击与长按 / 按键 / 文字输入 / 转屏 / 切页暂停恢复 / 多设备并行），但那台的系统版本号当时没记下来——这张表就是为此而建，以后每次验证都记一行。
-
-未验证：其他品牌与型号的鸿蒙设备、鸿蒙手表、模拟器。
+未验证：其他型号、模拟器、鸿蒙手表、鸿蒙PC、鸿蒙智慧屏、鸿蒙车机。
 
 ## 已知限制
 
@@ -98,12 +90,11 @@ Dev/doc-sidecar.md                    sidecar 协议、编译（必须 --release
 
 ## 二次开发
 
-- 架构图、开发约定、每个 demo 是干嘛的 → [`Dev/doc.md`](Dev/doc.md)
-- sidecar 的协议 / 编译 / 排障 → [`Dev/doc-sidecar.md`](Dev/doc-sidecar.md)
-- **基于 core 开发一个 provider** → [core/Dev/doc.md](https://github.com/ns-zzj/dsh-scrcpy-core/blob/main/Dev/doc.md)
+- sidecar 的编译、协议、排障 → [`Dev/doc.md`](Dev/doc.md)
+- **基于 core 开发一个 provider** → [core/Provider.md](https://github.com/ns-zzj/dsh-scrcpy-core/blob/main/Provider.md)
 
 ## 许可与第三方
 
 - 本包：**MIT**（见 `LICENSE`）
 - `resources/hosScrcpy-1.0.18-beta.jar`（HOScrcpy SDK）的出处、签名情况与再分发风险，见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
-- `jmuxer.min.js` 只存在于 `Dev/demo/`（开发件，不随 npm 包发布）；它仍随 Git 仓库分发，所以那边单独有一份声明 → [`Dev/demo/THIRD_PARTY_NOTICES.md`](Dev/demo/THIRD_PARTY_NOTICES.md)
+
